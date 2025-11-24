@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: trading_bot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading_network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: trading_bot_postgres
+    environment:
+      POSTGRES_DB: trading_bot
+      POSTGRES_USER: trading_user
+      POSTGRES_PASSWORD: trading_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading_user -d trading_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading_network
+
+  trading_bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: trading_bot_app
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=trading_bot
+      - POSTGRES_USER=trading_user
+      - POSTGRES_PASSWORD=trading_password
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./logs:/app/logs
+      - ./data_storage:/app/data_storage
+    networks:
+      - trading_network
+    command: python -m src.trading_bot.main
+
+volumes:
+  redis_data:
+  postgres_data:
+
+networks:
+  trading_network:
+    driver: bridge
