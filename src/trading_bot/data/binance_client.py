@@ -16,11 +16,14 @@ import json
 from ..core.config import config
 from ..core.logging_config import get_logger
 from ..models.market_data import OrderBook, Trade, Ticker, PriceLevel
+from ..utils.rate_limiter import rate_limiters
+from ..utils.symbol_mapping import SymbolMapper
+from ..exchanges.base_exchange import ExchangeClient
 
 logger = get_logger(__name__)
 
 
-class BinanceClient:
+class BinanceClient(ExchangeClient):
     """
     Async client for Binance API (testnet and production).
     Handles both REST API and WebSocket connections.
@@ -28,6 +31,9 @@ class BinanceClient:
 
     def __init__(self) -> None:
         """Initialize the Binance client."""
+        exchange_name = "binance_testnet" if config.binance.testnet_enabled else "binance"
+        super().__init__(exchange_name)
+
         self.api_key = config.binance.api_key
         self.api_secret = config.binance.api_secret
         self.base_url = config.binance.active_base_url
@@ -66,6 +72,14 @@ class BinanceClient:
             hashlib.sha256,
         ).hexdigest()
         return signature
+
+    def normalize_symbol(self, symbol: str) -> str:
+        """Convert normalized symbol to Binance format."""
+        return SymbolMapper.to_exchange_symbol(symbol, self.name)
+
+    def denormalize_symbol(self, exchange_symbol: str) -> str:
+        """Convert Binance symbol to normalized format."""
+        return SymbolMapper.normalize_symbol(exchange_symbol, self.name)
 
     async def get_server_time(self) -> int:
         """
@@ -106,23 +120,26 @@ class BinanceClient:
         Get current order book for a symbol.
 
         Args:
-            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            symbol: Trading pair symbol (normalized format like "BTC/USDT")
             limit: Order book depth (5, 10, 20, 50, 100, 500, 1000, 5000)
 
         Returns:
             OrderBook instance
         """
+        await rate_limiters.acquire(self.name)
+
         session = await self._get_session()
         url = f"{self.base_url}/v3/depth"
 
-        params = {"symbol": symbol, "limit": limit}
+        exchange_symbol = self.normalize_symbol(symbol)
+        params = {"symbol": exchange_symbol, "limit": limit}
 
         async with session.get(url, params=params) as response:
             data = await response.json()
 
             return OrderBook(
-                exchange="binance",
-                symbol=symbol,
+                exchange=self.name,
+                symbol=self.denormalize_symbol(exchange_symbol),
                 timestamp=int(time.time() * 1000),
                 bids=[[Decimal(p), Decimal(q)] for p, q in data["bids"]],
                 asks=[[Decimal(p), Decimal(q)] for p, q in data["asks"]],
@@ -134,16 +151,19 @@ class BinanceClient:
         Get recent trades for a symbol.
 
         Args:
-            symbol: Trading pair symbol
+            symbol: Trading pair symbol (normalized format)
             limit: Number of trades to retrieve (max 1000)
 
         Returns:
             List of Trade instances
         """
+        await rate_limiters.acquire(self.name)
+
         session = await self._get_session()
         url = f"{self.base_url}/v3/trades"
 
-        params = {"symbol": symbol, "limit": limit}
+        exchange_symbol = self.normalize_symbol(symbol)
+        params = {"symbol": exchange_symbol, "limit": limit}
 
         async with session.get(url, params=params) as response:
             data = await response.json()
@@ -152,8 +172,8 @@ class BinanceClient:
             for trade_data in data:
                 trades.append(
                     Trade(
-                        exchange="binance",
-                        symbol=symbol,
+                        exchange=self.name,
+                        symbol=self.denormalize_symbol(exchange_symbol),
                         trade_id=str(trade_data["id"]),
                         price=Decimal(trade_data["price"]),
                         quantity=Decimal(trade_data["qty"]),
@@ -170,22 +190,25 @@ class BinanceClient:
         Get 24-hour ticker for a symbol.
 
         Args:
-            symbol: Trading pair symbol
+            symbol: Trading pair symbol (normalized format)
 
         Returns:
             Ticker instance
         """
+        await rate_limiters.acquire(self.name)
+
         session = await self._get_session()
         url = f"{self.base_url}/v3/ticker/24hr"
 
-        params = {"symbol": symbol}
+        exchange_symbol = self.normalize_symbol(symbol)
+        params = {"symbol": exchange_symbol}
 
         async with session.get(url, params=params) as response:
             data = await response.json()
 
             return Ticker(
-                exchange="binance",
-                symbol=symbol,
+                exchange=self.name,
+                symbol=self.denormalize_symbol(exchange_symbol),
                 timestamp=data["closeTime"],
                 open_price=Decimal(data["openPrice"]),
                 high_price=Decimal(data["highPrice"]),
@@ -204,10 +227,11 @@ class BinanceClient:
         Subscribe to order book updates via WebSocket.
 
         Args:
-            symbol: Trading pair symbol
+            symbol: Trading pair symbol (normalized format)
             callback: Async function to call with order book updates
         """
-        stream_name = f"{symbol.lower()}@depth20@100ms"
+        exchange_symbol = self.normalize_symbol(symbol)
+        stream_name = f"{exchange_symbol.lower()}@depth20@100ms"
         ws_url = f"{self.ws_url}/{stream_name}"
 
         # Store callback
@@ -216,7 +240,7 @@ class BinanceClient:
         self._callbacks[stream_name].append(callback)
 
         # Start WebSocket connection in background
-        asyncio.create_task(self._handle_orderbook_ws(ws_url, symbol, stream_name))
+        asyncio.create_task(self._handle_orderbook_ws(ws_url, exchange_symbol, stream_name))
 
         logger.info("subscribed_to_orderbook", symbol=symbol, stream=stream_name)
 
@@ -242,8 +266,8 @@ class BinanceClient:
 
                         # Parse order book update
                         orderbook = OrderBook(
-                            exchange="binance",
-                            symbol=symbol,
+                            exchange=self.name,
+                            symbol=self.denormalize_symbol(symbol),
                             timestamp=data["E"],
                             bids=[[Decimal(p), Decimal(q)] for p, q in data["bids"]],
                             asks=[[Decimal(p), Decimal(q)] for p, q in data["asks"]],
@@ -277,12 +301,5 @@ class BinanceClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
+        self._running = False
         logger.info("binance_client_closed")
-
-    async def __aenter__(self) -> "BinanceClient":
-        """Async context manager entry."""
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Async context manager exit."""
-        await self.close()

@@ -59,6 +59,16 @@ class ArbitrageConfig(BaseModel):
                     taker_fee=Decimal("0.001"),
                     withdrawal_fee=Decimal("0.0005"),
                 ),
+                "coinbase": ExchangeFees(
+                    maker_fee=Decimal("0.004"),  # 0.4% maker
+                    taker_fee=Decimal("0.006"),  # 0.6% taker
+                    withdrawal_fee=Decimal("0.0010"),  # 0.1% withdrawal
+                ),
+                "kraken": ExchangeFees(
+                    maker_fee=Decimal("0.0016"),  # 0.16% maker
+                    taker_fee=Decimal("0.0026"),  # 0.26% taker
+                    withdrawal_fee=Decimal("0.0009"),  # 0.09% withdrawal
+                ),
                 "mock_exchange": ExchangeFees(
                     maker_fee=Decimal("0.0015"),
                     taker_fee=Decimal("0.0015"),
