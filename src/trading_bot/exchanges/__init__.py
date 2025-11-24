@@ -1,3 +1,7 @@
 """Exchange connectors."""
 
-# Additional exchange connectors will be added here
+from .mock_exchange import MockExchangeClient
+
+__all__ = [
+    "MockExchangeClient",
+]

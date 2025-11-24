@@ -157,6 +157,110 @@ async def main():
 asyncio.run(main())
 ```
 
+## Arbitrage Detection
+
+The bot includes a sophisticated arbitrage detection system that monitors price discrepancies across exchanges.
+
+### Features
+
+- **Cross-Exchange Comparison**: Compares orderbooks from multiple exchanges in real-time
+- **Fee Calculation**: Accounts for trading fees (0.1% per trade) and withdrawal fees
+- **Slippage Estimation**: Analyzes orderbook depth to estimate execution slippage
+- **Profit Filtering**: Only signals opportunities with >0.15% profit after fees
+- **Liquidity Checks**: Ensures sufficient liquidity for execution
+- **Statistics Tracking**: Success rate, average profit, and opportunity rankings
+
+### Monitor Arbitrage Opportunities
+
+```bash
+# Monitor with mock exchange for testing (default)
+make monitor
+
+# Monitor Binance only (requires testnet credentials)
+make monitor-binance
+
+# Or run directly with options
+python scripts/monitor_arbitrage.py --duration 60  # Run for 60 seconds
+```
+
+The monitor displays opportunities in a formatted table:
+
+```
+================================================================================
+Crypto Arbitrage Monitor
+Started at: 2024-11-24 10:30:00
+================================================================================
+
+Time         Symbol     Buy             Sell            Buy Price    Sell Price   Profit %   Qty
+----------------------------------------------------------------------------------------------------
+10:30:15     BTCUSDT    binance         mock_exchange   $50000.00    $50125.00    0.225%     1.2500
+10:30:17     ETHUSDT    mock_exchange   binance         $3000.50     $3008.20     0.206%     2.5000
+```
+
+### Programmatic Usage
+
+```python
+import asyncio
+from src.trading_bot.data import MultiExchangeManager
+
+async def main():
+    # Initialize with arbitrage detection enabled
+    async with MultiExchangeManager(
+        enable_arbitrage=True,
+        enable_mock_exchange=True
+    ) as manager:
+
+        # Subscribe to opportunities
+        async def on_opportunity(opp):
+            print(f"Opportunity: {opp.symbol}")
+            print(f"  Buy on {opp.buy_exchange} @ ${opp.buy_price}")
+            print(f"  Sell on {opp.sell_exchange} @ ${opp.sell_price}")
+            print(f"  Profit: {opp.profit_percent}%")
+
+        manager.subscribe_to_opportunities(on_opportunity)
+
+        # Monitor for 60 seconds
+        await asyncio.sleep(60)
+
+        # Get statistics
+        stats = manager.get_statistics()
+        print(f"Total opportunities: {stats['total_detected']}")
+        print(f"Success rate: {stats['success_rate_pct']:.2f}%")
+
+asyncio.run(main())
+```
+
+### Configuration
+
+Configure arbitrage detection parameters in code:
+
+```python
+from src.trading_bot.strategies import ArbitrageConfig, ArbitrageDetector
+from decimal import Decimal
+
+config = ArbitrageConfig(
+    min_profit_percent=Decimal("0.15"),    # Minimum 0.15% profit
+    safety_margin=Decimal("0.05"),          # Additional 0.05% safety
+    max_slippage_percent=Decimal("0.1"),    # Maximum 0.1% slippage
+    min_order_size_usd=Decimal("100"),      # Minimum $100 per trade
+    max_order_size_usd=Decimal("10000"),    # Maximum $10,000 per trade
+)
+
+detector = ArbitrageDetector(config=config)
+```
+
+### How It Works
+
+1. **Orderbook Collection**: Streams real-time orderbooks from multiple exchanges
+2. **Opportunity Detection**: Compares best bid/ask across all exchange pairs
+3. **Profit Calculation**:
+   - Gross profit = (sell_price - buy_price) / buy_price * 100
+   - Fees = buy_fee + sell_fee + withdrawal_fee (typically ~0.25%)
+   - Slippage = estimated from orderbook depth
+   - Net profit = gross_profit - fees - slippage
+4. **Filtering**: Only opportunities with net profit > threshold are signaled
+5. **Ranking**: Opportunities ranked by profitability for prioritization
+
 ## Development
 
 ### Install Development Dependencies
@@ -226,11 +330,14 @@ See `docker/init.sql` for complete schema.
 - [x] Binance testnet integration
 - [x] Real-time order book streaming
 - [x] Data persistence (Redis + PostgreSQL)
-- [ ] Simple arbitrage detector
-- [ ] Multi-exchange support
+- [x] Cross-exchange arbitrage detector
+- [x] Multi-exchange support (via MultiExchangeManager)
+- [x] Mock exchange for testing
+- [x] Real-time arbitrage monitoring CLI
 - [ ] Backtesting framework
-- [ ] Advanced trading strategies
+- [ ] Advanced trading strategies (triangular arbitrage, market making)
 - [ ] Risk management system
+- [ ] Order execution engine
 - [ ] Web dashboard for monitoring
 - [ ] Production deployment setup
 
