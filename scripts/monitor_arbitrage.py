@@ -8,7 +8,7 @@ import asyncio
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Set
 import signal
 
 # Add src to path
@@ -24,15 +24,21 @@ logger = get_logger(__name__)
 class ArbitrageMonitor:
     """Real-time arbitrage opportunity monitor with CLI display."""
 
-    def __init__(self, enable_mock: bool = True):
+    def __init__(
+        self,
+        enable_mock: bool = True,
+        enabled_exchanges: Optional[Set[str]] = None,
+    ):
         """
         Initialize the monitor.
 
         Args:
-            enable_mock: Enable mock exchange for testing
+            enable_mock: Enable mock exchange for testing (legacy param)
+            enabled_exchanges: Set of exchanges to enable
         """
         self.manager: Optional[MultiExchangeManager] = None
         self.enable_mock = enable_mock
+        self.enabled_exchanges = enabled_exchanges
         self.opportunity_count = 0
         self.shutdown_event = asyncio.Event()
 
@@ -41,14 +47,22 @@ class ArbitrageMonitor:
         self.YELLOW = "\033[93m"
         self.RED = "\033[91m"
         self.BLUE = "\033[94m"
+        self.CYAN = "\033[96m"
         self.BOLD = "\033[1m"
         self.RESET = "\033[0m"
 
     def print_header(self) -> None:
         """Print monitor header."""
         print("\n" + "=" * 100)
-        print(f"{self.BOLD}{self.BLUE}Crypto Arbitrage Monitor{self.RESET}")
+        print(f"{self.BOLD}{self.BLUE}Crypto Arbitrage Monitor - Multi-Exchange{self.RESET}")
         print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Display which exchanges are enabled
+        if self.enabled_exchanges:
+            exchanges_str = ", ".join(sorted(self.enabled_exchanges))
+        else:
+            exchanges_str = "binance, coinbase, kraken" + (", mock_exchange" if self.enable_mock else "")
+        print(f"{self.CYAN}Monitoring exchanges: {exchanges_str}{self.RESET}")
         print("=" * 100)
         print(
             f"\n{self.BOLD}{'Time':<12} {'Symbol':<10} {'Buy':<15} {'Sell':<15} "
@@ -159,6 +173,7 @@ class ArbitrageMonitor:
             self.manager = MultiExchangeManager(
                 enable_arbitrage=True,
                 enable_mock_exchange=self.enable_mock,
+                enabled_exchanges=self.enabled_exchanges,
             )
 
             await self.manager.start()
@@ -166,7 +181,14 @@ class ArbitrageMonitor:
             # Subscribe to opportunities
             self.manager.subscribe_to_opportunities(self.on_opportunity)
 
-            logger.info("arbitrage_monitor_started", enable_mock=self.enable_mock)
+            # Log active exchanges
+            active_exchanges = list(self.manager.exchanges.keys())
+            logger.info(
+                "arbitrage_monitor_started",
+                active_exchanges=active_exchanges,
+                enable_mock=self.enable_mock,
+            )
+            print(f"\n{self.GREEN}Successfully connected to: {', '.join(active_exchanges)}{self.RESET}\n")
 
             # Print status every 30 seconds
             async def print_periodic_status():
@@ -215,11 +237,21 @@ async def main() -> None:
     """Main function."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Monitor arbitrage opportunities")
+    parser = argparse.ArgumentParser(description="Monitor arbitrage opportunities across multiple exchanges")
     parser.add_argument(
         "--no-mock",
         action="store_true",
-        help="Disable mock exchange (only use Binance testnet)",
+        help="Disable mock exchange",
+    )
+    parser.add_argument(
+        "--exchanges",
+        type=str,
+        help="Comma-separated list of exchanges to enable (binance,coinbase,kraken,mock_exchange)",
+    )
+    parser.add_argument(
+        "--binance-only",
+        action="store_true",
+        help="Only use Binance exchange",
     )
     parser.add_argument(
         "--duration",
@@ -229,7 +261,19 @@ async def main() -> None:
 
     args = parser.parse_args()
 
-    monitor = ArbitrageMonitor(enable_mock=not args.no_mock)
+    # Determine enabled exchanges
+    enabled_exchanges = None
+    if args.exchanges:
+        enabled_exchanges = set(args.exchanges.lower().split(","))
+    elif args.binance_only:
+        enabled_exchanges = {"binance"}
+    elif args.no_mock:
+        enabled_exchanges = {"binance", "coinbase", "kraken"}
+
+    monitor = ArbitrageMonitor(
+        enable_mock=not args.no_mock and not args.exchanges and not args.binance_only,
+        enabled_exchanges=enabled_exchanges,
+    )
 
     # Set up signal handlers
     loop = asyncio.get_event_loop()

@@ -4,13 +4,15 @@ Extends DataManager to support arbitrage detection across exchanges.
 """
 
 import asyncio
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Set
 from decimal import Decimal
 
 from ..core.config import config
 from ..core.logging_config import get_logger
 from ..models.market_data import OrderBook
 from .binance_client import BinanceClient
+from ..exchanges.coinbase_client import CoinbaseClient
+from ..exchanges.kraken_client import KrakenClient
 from ..exchanges.mock_exchange import MockExchangeClient
 from ..strategies.arbitrage_detector import ArbitrageDetector
 
@@ -23,20 +25,35 @@ class MultiExchangeManager:
     Integrates with ArbitrageDetector for cross-exchange opportunity detection.
     """
 
+    # All supported exchanges
+    SUPPORTED_EXCHANGES: Set[str] = {"binance", "coinbase", "kraken", "mock_exchange"}
+
     def __init__(
         self,
         enable_arbitrage: bool = True,
         enable_mock_exchange: bool = False,
+        enabled_exchanges: Optional[Set[str]] = None,
     ):
         """
         Initialize the MultiExchangeManager.
 
         Args:
             enable_arbitrage: Enable arbitrage detection
-            enable_mock_exchange: Enable mock exchange for testing
+            enable_mock_exchange: Enable mock exchange for testing (legacy param)
+            enabled_exchanges: Set of exchanges to enable. If None, enables binance, coinbase, kraken.
+                              Valid values: "binance", "coinbase", "kraken", "mock_exchange"
         """
         self.enable_arbitrage = enable_arbitrage
         self.enable_mock_exchange = enable_mock_exchange
+
+        # Determine which exchanges to enable
+        if enabled_exchanges is not None:
+            self.enabled_exchanges = enabled_exchanges & self.SUPPORTED_EXCHANGES
+        else:
+            # Default: enable all real exchanges
+            self.enabled_exchanges = {"binance", "coinbase", "kraken"}
+            if enable_mock_exchange:
+                self.enabled_exchanges.add("mock_exchange")
 
         # Exchange clients
         self.exchanges: Dict[str, Any] = {}
@@ -50,7 +67,7 @@ class MultiExchangeManager:
         logger.info(
             "multi_exchange_manager_initialized",
             enable_arbitrage=enable_arbitrage,
-            enable_mock=enable_mock_exchange,
+            enabled_exchanges=list(self.enabled_exchanges),
         )
 
     async def start(self) -> None:
@@ -59,20 +76,10 @@ class MultiExchangeManager:
             logger.warning("multi_exchange_manager_already_running")
             return
 
-        logger.info("starting_multi_exchange_manager")
+        logger.info("starting_multi_exchange_manager", exchanges=list(self.enabled_exchanges))
 
-        # Initialize Binance client
-        binance_client = BinanceClient()
-        self.exchanges["binance"] = binance_client
-
-        # Initialize mock exchange if enabled
-        if self.enable_mock_exchange:
-            mock_client = MockExchangeClient(
-                name="mock_exchange",
-                price_offset_pct=0.25,  # 0.25% higher prices on average
-                volatility=0.15,  # Some randomness
-            )
-            self.exchanges["mock_exchange"] = mock_client
+        # Initialize exchange clients based on enabled exchanges
+        await self._initialize_exchanges()
 
         # Initialize arbitrage detector
         if self.enable_arbitrage:
@@ -89,7 +96,68 @@ class MultiExchangeManager:
         await self._subscribe_all_streams()
 
         self._running = True
-        logger.info("multi_exchange_manager_started")
+        logger.info(
+            "multi_exchange_manager_started",
+            active_exchanges=list(self.exchanges.keys()),
+        )
+
+    async def _initialize_exchanges(self) -> None:
+        """Initialize all enabled exchange clients."""
+        initialization_errors: Dict[str, str] = {}
+
+        # Initialize Binance
+        if "binance" in self.enabled_exchanges:
+            try:
+                binance_client = BinanceClient()
+                self.exchanges["binance"] = binance_client
+                logger.info("exchange_initialized", exchange="binance")
+            except Exception as e:
+                initialization_errors["binance"] = str(e)
+                logger.error("exchange_initialization_failed", exchange="binance", error=str(e))
+
+        # Initialize Coinbase
+        if "coinbase" in self.enabled_exchanges:
+            try:
+                coinbase_client = CoinbaseClient(use_sandbox=False)
+                self.exchanges["coinbase"] = coinbase_client
+                logger.info("exchange_initialized", exchange="coinbase")
+            except Exception as e:
+                initialization_errors["coinbase"] = str(e)
+                logger.error("exchange_initialization_failed", exchange="coinbase", error=str(e))
+
+        # Initialize Kraken
+        if "kraken" in self.enabled_exchanges:
+            try:
+                kraken_client = KrakenClient()
+                self.exchanges["kraken"] = kraken_client
+                logger.info("exchange_initialized", exchange="kraken")
+            except Exception as e:
+                initialization_errors["kraken"] = str(e)
+                logger.error("exchange_initialization_failed", exchange="kraken", error=str(e))
+
+        # Initialize Mock exchange (for testing)
+        if "mock_exchange" in self.enabled_exchanges:
+            try:
+                mock_client = MockExchangeClient(
+                    name="mock_exchange",
+                    price_offset_pct=0.25,  # 0.25% higher prices on average
+                    volatility=0.15,  # Some randomness
+                )
+                self.exchanges["mock_exchange"] = mock_client
+                logger.info("exchange_initialized", exchange="mock_exchange")
+            except Exception as e:
+                initialization_errors["mock_exchange"] = str(e)
+                logger.error("exchange_initialization_failed", exchange="mock_exchange", error=str(e))
+
+        if initialization_errors:
+            logger.warning(
+                "some_exchanges_failed_to_initialize",
+                errors=initialization_errors,
+                successful=list(self.exchanges.keys()),
+            )
+
+        if not self.exchanges:
+            raise RuntimeError("No exchanges were successfully initialized")
 
     async def _subscribe_all_streams(self) -> None:
         """Subscribe to orderbook streams for all configured symbols."""

@@ -1,21 +1,24 @@
-.PHONY: help install dev-install test lint format type-check clean docker-up docker-down docker-logs monitor monitor-binance
+.PHONY: help install dev-install test lint format type-check clean docker-up docker-down docker-logs monitor monitor-binance monitor-all paper-trade test-exchanges
 
 help:
 	@echo "Available commands:"
-	@echo "  make install         - Install production dependencies"
-	@echo "  make dev-install     - Install development dependencies"
-	@echo "  make test            - Run tests with coverage"
-	@echo "  make lint            - Run linter (ruff)"
-	@echo "  make format          - Format code with black"
-	@echo "  make type-check      - Run type checker (mypy)"
-	@echo "  make clean           - Clean up cache and build files"
-	@echo "  make docker-up       - Start all Docker services"
-	@echo "  make docker-down     - Stop all Docker services"
-	@echo "  make docker-logs     - View Docker logs"
-	@echo "  make run             - Run the trading bot"
-	@echo "  make example         - Run example usage script"
-	@echo "  make monitor         - Monitor arbitrage opportunities (with mock exchange)"
-	@echo "  make monitor-binance - Monitor arbitrage on Binance only (no mock)"
+	@echo "  make install           - Install production dependencies"
+	@echo "  make dev-install       - Install development dependencies"
+	@echo "  make test              - Run tests with coverage"
+	@echo "  make lint              - Run linter (ruff)"
+	@echo "  make format            - Format code with black"
+	@echo "  make type-check        - Run type checker (mypy)"
+	@echo "  make clean             - Clean up cache and build files"
+	@echo "  make docker-up         - Start all Docker services"
+	@echo "  make docker-down       - Stop all Docker services"
+	@echo "  make docker-logs       - View Docker logs"
+	@echo "  make run               - Run the trading bot"
+	@echo "  make example           - Run example usage script"
+	@echo "  make monitor           - Monitor arbitrage opportunities (with mock exchange)"
+	@echo "  make monitor-binance   - Monitor arbitrage on Binance only (no mock)"
+	@echo "  make monitor-all       - Monitor all exchanges (Binance, Coinbase, Kraken)"
+	@echo "  make paper-trade       - Run paper trading dashboard"
+	@echo "  make test-exchanges    - Test multi-exchange orderbook fetching"
 
 install:
 	pip install -r requirements.txt
@@ -61,3 +64,12 @@ monitor:
 
 monitor-binance:
 	python scripts/monitor_arbitrage.py --no-mock
+
+monitor-all:
+	python scripts/monitor_arbitrage.py --exchanges=binance,coinbase,kraken
+
+paper-trade:
+	python scripts/paper_trading_dashboard.py
+
+test-exchanges:
+	python scripts/test_multi_exchange.py
